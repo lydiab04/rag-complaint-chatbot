@@ -1,50 +1,214 @@
-# src/rag_core.py
-import chromadb
-from sentence_transformers import SentenceTransformer
 import os
-from groq import Groq # Example using an ultra-fast free/cheap endpoint
+import chromadb
 
-def run_rag_pipeline(query, product_filter=None):
-    # Connect to the full pre-built ChromaDB
-    chroma_client = chromadb.PersistentClient(path="vector_store/full_store")
-    collection = chroma_client.get_collection(name="complaints_full")
-    
-    # Embed Query
-    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-    query_vector = model.encode(query).tolist()
-    
-    # Query Database with optional product filtering metadata
-    where_clause = {"product_category": product_filter} if product_filter else None
+from sentence_transformers import SentenceTransformer
+
+from transformers import pipeline
+
+
+
+embedding_model = SentenceTransformer(
+
+    "all-MiniLM-L6-v2"
+
+)
+
+
+generator = pipeline(
+
+    "text-generation",
+
+    model="distilbert/distilgpt2"
+
+)
+
+
+
+
+def run_rag_pipeline(question, product_filter=None):
+    # 1. Dynamically resolve the absolute path to the project root directory
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    VECTOR_STORE_PATH = os.path.join(BASE_DIR, "vector_store")
+
+    # 2. Initialize ChromaDB client using the absolute path
+    client = chromadb.PersistentClient(path=VECTOR_STORE_PATH)
+
+    # 3. Get the existing collection safely
+    collection = client.get_collection("complaints")
+
+    query_embedding = embedding_model.encode(question).tolist()
+
+    # FIX: If a product filter is provided, format it for ChromaDB's where clause
+    where_clause = {"product": product_filter} if product_filter else None
+
     results = collection.query(
-        query_embeddings=[query_vector],
+        query_embeddings=[query_embedding],
         n_results=5,
-        where=where_clause
+        where=where_clause  # <-- Pass the filter rule here!
     )
-    
-    context_chunks = results['documents'][0]
-    metadatas = results['metadatas'][0]
-    
-    # Synthesize context
-    context_str = "\n\n".join([f"[Source ID: {m['complaint_id']} | Product: {m['product_category']}]: {doc}" 
-                               for doc, m in zip(context_chunks, metadatas)])
-    
-    # Prompt Template Strategy
-    prompt = f"""You are a senior financial analyst assistant for CrediTrust Financial. 
-Your task is to answer strategic questions about customer complaints using only the provided context excerpts.
 
-Context:
-{context_str}
+    docs = results["documents"][0]
+    context = "\n".join(docs)
 
-Question: {query}
+    prompt = f"""
+You are a financial analyst assistant.
 
-Answer the question thoroughly, highlighting trends and citing source IDs where appropriate. If the context does not contain the answer, state transparently that you do not have enough information.
-Answer:"""
+Use ONLY the supplied context.
 
-    # Call LLM
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-    response = client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama3-8b-8th",
+Context
+{context}
+
+Question
+{question}
+
+Answer
+"""
+
+    response = generator(
+        prompt, 
+        max_new_tokens=60, 
+        temperature=0.3, 
+        repetition_penalty=1.2, 
+        do_sample=True
     )
+    answer = response[0]["generated_text"]
     
-    return response.choices[0].message.content, context_chunks
+    if "Answer" in answer:
+        answer = answer.split("Answer")[-1].strip()
+
+    return answer, docs
+    # 1. Dynamically resolve the absolute path to the project root directory
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    VECTOR_STORE_PATH = os.path.join(BASE_DIR, "vector_store")
+
+    # 2. Initialize ChromaDB client using the absolute path
+    client = chromadb.PersistentClient(path=VECTOR_STORE_PATH)
+
+    # 3. Get the existing collection safely
+    collection = client.get_collection("complaints")
+
+    query_embedding = embedding_model.encode(question).tolist()
+
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=5
+    )
+
+    docs = results["documents"][0]
+    context = "\n".join(docs)
+
+    prompt = f"""
+You are a financial analyst assistant.
+
+Use ONLY the supplied context.
+
+Context
+{context}
+
+Question
+{question}
+
+Answer
+"""
+
+    # Add temperature and repetition penalty to stop looping patterns
+    response = generator(
+        prompt,
+        max_new_tokens=60,          # Keeps the answer concise for your table
+        temperature=0.3,            # Low temperature makes it more deterministic/focused
+        repetition_penalty=1.2,     # Heavily penalizes repeating the same sentences
+        do_sample=True
+    )
+
+    full_text = response[0]["generated_text"]
+    
+    # Extract only the text generated AFTER your prompt's "Answer" tag
+    if "Answer" in full_text:
+        answer = full_text.split("Answer")[-1].strip()
+    else:
+        answer = full_text
+        
+    return answer, docs
+
+    # 1. Dynamically resolve the absolute path to the root 'vector_store' directory
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    VECTOR_STORE_PATH = os.path.join(BASE_DIR, "vector_store")
+
+    # 2. Connect using the safe absolute path
+    client = chromadb.PersistentClient(path=VECTOR_STORE_PATH)
+    
+    # 3. This will now look in the correct folder and find your data!
+    collection = client.get_collection("complaints")
+
+
+
+    query_embedding = embedding_model.encode(
+
+        question
+
+    ).tolist()
+
+
+
+    results = collection.query(
+
+        query_embeddings=[query_embedding],
+
+        n_results=5
+
+    )
+
+
+
+    docs = results["documents"][0]
+
+
+
+    context = "\n".join(docs)
+
+
+
+
+    prompt = f"""
+
+You are a financial analyst assistant.
+
+
+Use ONLY the supplied context.
+
+
+
+Context
+
+{context}
+
+
+
+Question
+
+{question}
+
+
+
+Answer
+
+
+"""
+
+
+
+    response = generator(
+
+        prompt,
+
+        max_new_tokens=150
+
+    )
+
+
+
+    answer = response[0]["generated_text"]
+
+
+
+    return answer,docs
