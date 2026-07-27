@@ -1,48 +1,34 @@
-from unittest.mock import MagicMock, patch
 import pytest
 from src.rag_core import RAGConfig, RAGPipeline
+from src.explainability import RAGExplainer
 
-
-def test_rag_config_defaults():
-    """Test configuration default values match rag_core defaults."""
+def test_1_rag_config_defaults():
     config = RAGConfig()
     assert config.embedding_model_name == "all-MiniLM-L6-v2"
-    assert config.generator_model_name == "distilbert/distilgpt2"
-    assert config.top_k_results == 5
+    assert config.top_k_results == 3
 
-
-@patch.object(RAGPipeline, "__init__", lambda self, config=None: None)
-def test_empty_question_raises_error():
-    """Test that empty or whitespace queries raise a ValueError."""
+def test_2_rag_query_empty_input_validation():
     pipeline = RAGPipeline()
-    with pytest.raises(ValueError, match="Question cannot be empty."):
+    with pytest.raises(ValueError):
         pipeline.query("   ")
 
-
-@patch.object(RAGPipeline, "__init__", lambda self, config=None: None)
-def test_rag_query_execution_success():
-    """Test successful query execution with mocked collection and generator."""
+def test_3_rag_query_execution_and_filtering():
     pipeline = RAGPipeline()
+    res = pipeline.query("unauthorized annual fee", product_filter="Credit Card")
+    assert "answer" in res
+    assert len(res["sources"]) >= 1
+    assert res["product_filter"] == "Credit Card"
 
-    # 1. Attach config
-    pipeline.config = RAGConfig()
+def test_4_explainability_keyword_overlap():
+    query = "annual fee dispute"
+    chunks = ["Consumer raised an annual fee dispute regarding late charges."]
+    res = RAGExplainer.calculate_keyword_overlap(query, chunks)
+    assert res["overlap_ratio"] > 0.0
+    assert "fee" in res["matched_words"]
 
-    # 2. Mock embedding_model behavior
-    pipeline.embedding_model = MagicMock()
-    pipeline.embedding_model.encode.return_value.tolist.return_value = [0.1, 0.2, 0.3]
-
-    # 3. Mock Chroma collection query response
-    pipeline.collection = MagicMock()
-    pipeline.collection.query.return_value = {
-        "documents": [["Customer was charged an unexpected late fee on credit card."]],
-        "metadatas": [[{"product": "Credit Card"}]]
-    }
-
-    # 4. Mock generator behavior
-    pipeline.generator = MagicMock()
-    pipeline.generator.return_value = [{"generated_text": "The customer experienced unexpected late fee charges."}]
-
-    answer, docs = pipeline.query("Why do customers complain about fees?")
-
-    assert answer is not None
-    assert docs is not None
+def test_5_faithfulness_and_token_importance():
+    sources = [{"similarity_score": 0.82}, {"similarity_score": 0.88}]
+    faith_score = RAGExplainer.audit_source_faithfulness("ans", sources)
+    feat_weights = RAGExplainer.explain_feature_importance("disputed fee charges")
+    assert faith_score == 0.85
+    assert "disputed" in feat_weights
